@@ -1,0 +1,854 @@
+# ==============================================
+# = ANALYSIS of CORAL LIFE HISTORY CLUSTERS    =
+# ==============================================
+
+#A somewhat messy but intact (and my first GitHub) set of code that underlies the analysis and figures of Darling et al. Ecology Letters
+#2012 to describe the multivariate classification of coral life histories based on species traits
+
+#Darling, E. S., Alvarez‐Filip, L., Oliver, T. A., McClanahan, T. R., & Côté, I. M. (2012). 
+#Evaluating life‐history strategies of reef corals from species traits. Ecology letters, 15(12), 1378-1386.
+
+#Updated trait information is freely available on www.coraltraits.org for future analyses     
+
+##Load libraries 
+
+library(plyr)
+library(reshape)
+library(graphics)
+library(ggplot2)
+library(RColorBrewer)
+library(lattice)
+library(plyr)
+library(vegan)
+library(ggExtra)
+library(FD)
+library(MASS)
+library(beanplot)
+library(car)
+library(randomForest)
+library(gdata)
+library(gridExtra)
+
+# ==============================================================
+# = Use raw long data on everything - "combined_alltraits.csv" =
+# ==============================================================
+setwd("/Users/em.work/Dropbox/R_data/Global coral traits/Global Clusters_Dec2011")
+d1<-read.csv(file = "combined_alltraits_Dec2011.csv", header = TRUE, stringsAsFactors = TRUE)
+head(d1)
+nrow(d1)
+names(d1)
+
+levels(d1$trait)   
+
+# =================================
+# = Subset traits that I am using =
+# =================================
+traits <- subset(d1, trait=="Branching" | trait=="Brooding" | trait=="Corallite" | trait=="Domed" |
+ 	trait=="Fecundity" | trait=="Genlength" | trait=="Growthrate" | trait=="Maxsize" | trait=="MedianDepth" |
+ 	trait=="Plating" | trait=="Skeldens" | trait=="Solitary" | trait=="Zoox_looseM" |
+	trait == "Hermaphroditic")
+head(traits)
+nrow(traits)
+names(traits)
+str(traits)
+
+#Relevel trait factor into order that I want (and drop unused levels)
+traits$trait <- factor(traits$trait, levels=c("Branching","Domed","Plating","Solitary","Brooding",
+	"Corallite","Fecundity","Genlength","Growthrate","Maxsize","MedianDepth","Skeldens","Zoox_looseM",
+	"Hermaphroditic"))
+levels(traits$trait)
+
+#Calculate species averages of all traits and cast wide
+#1. Calculate average by source
+traits2 <- ddply(traits, c("region","species","trait","source"), function(x)
+	data.frame(source_mean = mean(x$value, na.rm=TRUE)))
+
+#2. Calculate average by species
+traits3 <- ddply(traits2, c("region","species","trait"), function(x)
+	data.frame(spp_mean = mean(x$source_mean, na.rm=TRUE)))
+head(traits3)
+nrow(traits3)
+names(traits3)
+
+#2A. For trait count, recode if there is non-NA value
+traits3$count <- ifelse(traits3$spp_mean >= 0, 1, 0)
+
+#3. Cast wide
+traits_wide <- cast(traits3, region + species ~ trait, value="spp_mean")
+head(traits_wide)
+nrow(traits_wide)
+names(traits_wide)	
+
+#3A Cast count of traits to calculate number of traits
+no_traits <- cast(traits3, region + species ~ trait, value="count")
+no_traits[is.na(no_traits)] <- 0
+head(no_traits)
+nrow(no_traits)
+names(no_traits)
+
+#4. Count number of traits (Growth form includes branching, plating, domed & solitary) 
+# Don't count hermaphroditic, not using in analysis
+no_traits$ntraits <- rowSums(no_traits[6:15])
+hist(no_traits$ntraits)
+names(no_traits)
+
+#4A Merge into wide traits data
+traits_wide2 <- merge(traits_wide, no_traits[,c(1:2,17)], by=c("region","species"))
+head(traits_wide2)
+nrow(traits_wide2)
+names(traits_wide2)
+
+write.csv(traits_wide2, "Traits data wide_all species.csv", row.names=FALSE)
+
+# ========================
+# = Clustering of traits =
+# ========================
+setwd("/Users/em.work/Dropbox/R_data/Global coral traits/Global Clusters_Dec2011")
+traits_wide2 <- read.csv(file = "Traits data wide_all species.csv", header = TRUE, stringsAsFactors = TRUE)
+
+head(traits_wide2)
+nrow(traits_wide2)
+names(traits_wide2)
+
+table(traits_wide2$region)
+
+#global <- subset(traits_wide2, ntraits == 10)
+#nrow(global)
+#table(global$region)
+#global$species
+
+max(traits_wide2$ntraits)
+
+#1. Select species with 70% of traits
+global <- subset(traits_wide2, ntraits >= 7)
+head(global)
+nrow(global)
+names(global)
+
+#Remove Millepora, only non-Scleractinian left in analysis
+global$species
+global <- global[-which(global$species == "Millepora alcicornis" | global$species == "Millepora complanata" |
+ 		global$species == "Millepora squarrosa"),]
+levels(drop.levels(global$species))
+
+
+#global <- global[-which(global$species == "Millepora alcicornis" | global$species == "Millepora complanata"),]
+nrow(global)
+
+#plot(table(global$ntraits))
+table(global$region)
+
+# ===================
+# = Clustering code =
+# ===================
+names(global)
+nrow(global)
+head(global)
+
+
+#2. Calculate weighted Gower dissimilarity index
+weights<-c(0.33,0.33,0.33,1,1,1,1,1,1,1,1,1,1)
+
+Global_gow <- gowdis(global[,c(3:15)], w = weights)
+attributes(Global_gow)
+
+Global_clust <- hclust(Global_gow,method="ward")
+
+#quartz()
+#plot(Global_clust, labels=global$species, cex=0.7)
+plot(Global_clust, labels=global$species, cex=0.5)
+#plot(Global_clust, labels=global$species, cex=0.3)
+rect.hclust(Global_clust, 4)
+
+
+# ============================================================
+# = Separate reproduction into brooding and spawning columns =
+# ============================================================
+# ================================================
+# = Include sexuality as hermaphrodite, gonochore =
+# =================================================
+names(global)
+global$Spawning <- ifelse(global$Brooding == 0 | global$Brooding == 0.5, 1,
+		ifelse(global$Brooding == 1, 0, global$Brooding))
+global$Brooding <- ifelse(global$Brooding > 0, 1, global$Brooding)
+
+#par(mfrow = c(1,2))
+#hist(global$Spawning)
+#hist(global$Brooding)
+
+global$Gonochore <- ifelse(global$Hermaphroditic == 0, 1, 
+		ifelse(global$Hermaphroditic == 1, 0, global$Hermaphroditic))
+global$Hermaphroditic <- ifelse(global$Hermaphroditic > 0, 1, global$Hermaphroditic)
+
+#par(mfrow = c(1,2))
+#hist(global$Gonochore)
+#hist(global$Hermaphroditic)
+
+#Calculate weighted Gower dissimilarity index
+names(global)
+weights<-c(0.33,0.33,0.33,1,0.5,1,1,1,1,1,1,1,1,0.5)
+Global_gow <- gowdis(global[,c(3:15,18)], w = weights)
+attributes(Global_gow)
+
+Global_clust <- hclust(Global_gow, method="ward")
+plot(Global_clust, labels=global$species, cex=0.5)
+rect.hclust(Global_clust, 4)
+  
+
+# ==========================================
+# = Adonis to find best number of clusters =
+# ==========================================
+names(global)
+ncol(global)
+#For loop to cut tree in 2 to 10 clusters AND make new columns 
+for(i in (2:10)){
+	groups<-cutree(Global_clust,i)
+	k = 19 + (i-1)
+	cluster_name=paste("cluster",i, sep="")
+	global[,k]<-as.factor(groups)
+	colnames(global)[k]<-cluster_name
+}
+
+names(global)
+head(global)
+nrow(global)
+
+#Set up empty matrix to store ADONIS results
+parnames <- c("no_clusters","adonis_R2")
+npar <- length(parnames)
+
+M0 <- matrix(nrow=9,ncol=npar)   
+colnames(M0) <- parnames
+
+for(i in (2:10)){
+	groups<-cutree(Global_clust,i)
+	cluster_name=paste("cluster",i, sep="")
+	#print(cluster_name)
+	#print(adonis(Global_gow ~ groups))
+	#print(anosim(Global_gow, groups))
+	
+	adonis_model <- adonis(Global_gow ~ groups)
+	R2 <- adonis_model$aov.tab[[5]][1]
+	
+	j <- i - 1
+	M0[j,1] <- cluster_name
+	M0[j,2] <- R2
+}
+M0
+
+write.csv(global, "Traits data with clusters_wide.csv", row.names=FALSE)
+
+ 
+# =======================================
+# = PLOTS for Darling et al. ELE 2012   =
+# =======================================
+# =======================
+# = Colour dendrograms  =
+# =======================
+names(Global_clust)
+
+library(fpc)
+#Don't move A2r tar.gz file, needs it to load library every time
+install.packages("/Users/em.work/Documents/Work/SFU/Stats/R/A2R_0.0-4.tar.gz", type="source")
+# get that package from 
+# http://addictedtor.free.fr/packages
+library(A2R)
+
+#Plot for REVISED manuscript, 140 spp, 7 out of 10 traits cutoff 
+# N= 4 clusters
+nrow(global)
+A2Rplot(Global_clust, 
+        k=4, 
+        fact.sup=global$region, 
+        boxes = FALSE,
+		show.labels = FALSE,
+        col.up = "black",
+        col.down = c("#F8210D","#95F80D","208","#00B4F8"), 
+		lty.up=1)
+ setwd("/Users/em.work/Dropbox/R_data/Global coral traits/Global Clusters_Dec2011/plots/revision plots")
+dev.print(device = postscript, "Cluster_143spp_revision.eps")
+
+# ========================
+# = PCoA Ordination plot =
+# ========================
+setwd("/Users/em.work/Dropbox/R_data/Global coral traits/Global Clusters_Dec2011")
+global <- read.csv(file = "Traits data with clusters_wide.csv", header = TRUE, stringsAsFactors = TRUE)
+head(global)
+names(global)
+nrow(global)
+
+subset(global, cluster3 == 1 & region == "Caribb")
+table(global$cluster3)
+attributes(Global_gow)
+
+global_dbFD <- dbFD(Global_gow, print.pco=TRUE, corr="cailliez", calc.CWM=FALSE)
+#dbFD(Global_gow, print.pco=TRUE, corr="lingoes", calc.CWM=FALSE, m=4)
+#dbFD(Global_gow, print.pco=TRUE, corr="none", calc.CWM=FALSE, m=4)
+
+#Calculate proportion of variation explained by each axis
+#x.values are eigenvectors and there are less of them than species
+#all are positive, yay
+global_dbFD$x.values
+prop_var <- global_dbFD$x.values/sum(global_dbFD$x.values)
+barplot(prop_var[1:20])
+
+#1st 2 axis explain ~10.2% of variation; first 3 axes explain ~12.8% of variation
+(global_dbFD$x.values[1]+global_dbFD$x.values[2])/sum(global_dbFD$x.values)
+(global_dbFD$x.values[1]+global_dbFD$x.values[2]+global_dbFD$x.values[3])/sum(global_dbFD$x.values)
+
+(global_dbFD$x.values[1])/sum(global_dbFD$x.values)
+(global_dbFD$x.values[2])/sum(global_dbFD$x.values)
+
+#140 species with points in PCoA space
+nrow(global_dbFD$x.axes[,1:4])
+head(global_dbFD$x.axes[,1:4])
+
+par(mfrow = c(1,1))
+plot(global_dbFD$x.axes[,1], global_dbFD$x.axes[,2], col=global$cluster3)
+text(global_dbFD$x.axes[,1], global_dbFD$x.axes[,2], labels=global$species, cex=0.6, pos=4)
+
+# ==============================================================
+# = Double projection PCoA plot, species + original traits??!! =
+# ==============================================================
+#FIRST METHOD, BORCARD chapter 5, page 142
+#spe.gow.pcoa <- cmdscale(Global_gow, k=5, eig=TRUE)
+#add=TRUE add Caillez correction which dbFD says I need
+spe.gow.pcoa <- cmdscale(Global_gow, k=5, eig=TRUE)
+
+#plot of species species
+dev.new(width=9, height=4.3)
+par(mfrow = c(1,2))
+ordiplot(scores(spe.gow.pcoa)[,1:2], type="t")
+abline(h=0, lty=3)
+abline(v=0, lty=3)
+
+#plot of traits overlaid
+#dev.new(width=4.5, height=4.3)
+#traits.wa <- wascores(spe.gow.pcoa$points[,1:2], global[,c(3:16)])
+head(globalImpute4)
+names(globalImpute4)
+
+traits.wa <- wascores(spe.gow.pcoa$points[,1:2], globalImpute4[,4:17])
+traits.wa
+text(traits.wa, rownames(traits.wa), cex=0.7, col="red")
+
+#SECOND METHOD
+library(ape)
+spe.gow.pcoa2 <- pcoa(Global_gow)
+
+par(mfrow = c(1,2))
+#First plot, raw species data
+biplot.pcoa(spe.gow.pcoa2, globalImpute4[,4:17])
+#Second plot, standardized species data
+spe.std <- apply(globalImpute4[,4:17], 2, scale)
+biplot.pcoa(spe.gow.pcoa2, spe.std)
+
+biplot.pcoa(spe.gow.pcoa2)
+#Percentage of variance for PCOA axes
+names(spe.gow.pcoa2$values)
+
+#See Eigenvalues, some negative -- apply Caillez correction?
+spe.gow.pcoa2$values[1]
+
+#Caillez correction
+spe.gow.pcoa2_cal <- pcoa(Global_gow, correction = "cailliez")
+
+spe.gow.pcoa2_cal$vectors.cor[,1:2]
+plot(spe.gow.pcoa2_cal$vectors[,1], spe.gow.pcoa2_cal$vectors[,2])
+
+quartz()
+biplot.pcoa(spe.gow.pcoa2_cal)
+
+biplot.pcoa(spe.gow.pcoa2_cal, spe.std, dir.axis1 = 1, dir.axis2 = 1)
+
+#See cumulative Eigenvalues
+head(spe.gow.pcoa2_cal$values)
+
+# ======================
+# = GGplot PCoA figure =
+# ======================
+pcoa_data <- data.frame(cluster4 = global$cluster4, species = global$species, 
+						pcoa_axis1 = spe.gow.pcoa2_cal$vectors[,1], pcoa_axis2 = spe.gow.pcoa2_cal$vectors[,2])
+
+pcoa_data$cluster4 <- factor(pcoa_data$cluster4, levels = c(1,3,4,2))
+subset(pcoa_data, cluster4 == 4)
+table(pcoa_data$cluster4)
+
+pcoa_data$lifehistory <- recode(pcoa_data$cluster4, "1='Competitive'; 2='Weedy';3='Stress-tolerant'; 
+	4 = 'Intermediate'")
+levels(pcoa_data$lifehistory)
+
+#Abbreviate species names to ID in PCOA plot
+pcoa_data$spp_abbrev <- abbreviate(pcoa_data$species, 4)
+head(pcoa_data$spp_abbrev)
+
+#Add region into database for symbol type
+global <- read.csv(file = "Traits data with clusters_wide.csv", header = TRUE, stringsAsFactors = TRUE)
+head(global)
+names(global)
+nrow(global)
+
+pcoa_data <- merge(pcoa_data, global[,1:2], by = "species")
+names(pcoa_data)
+	
+pcoa_data <- pcoa_data[,c(7,1,6,2:5)]	
+head(pcoa_data)
+
+write.csv(pcoa_data, "PCoA data with spp_abbrev.csv", row.names=FALSE)
+
+# =====================
+# = READ IN PCOA DATA =
+# =====================
+setwd("/Users/em.work/Dropbox/R_data/Global coral traits/Global Clusters_Dec2011")
+pcoa_data <- read.csv(file = "PCoA data with spp_abbrev.csv", header = TRUE, stringsAsFactors = TRUE)
+head(pcoa_data)
+names(pcoa_data)
+nrow(pcoa_data)
+str(pcoa_data)
+
+pcoa_data$species
+
+subset(pcoa_data, cluster4 == 4)
+
+pcoa_data$lifehistory <- recode(pcoa_data$cluster4, "1='Competitive'; 2='Weedy';3='Stress-tolerant'; 
+	4 = 'Intermediate'")
+pcoa_data$lifehistory <- factor(pcoa_data$lifehistory, 
+	levels = c("Competitive","Weedy","Stress-tolerant", "Intermediate"))
+levels(pcoa_data$lifehistory)
+
+intermediate <- subset(pcoa_data, lifehistory == "Intermediate")
+
+
+pcoa_data[which(pcoa_data$species == "Hydnophora exesa" | pcoa_data$species == "Hydnophora microconos"),]
+pcoa_data[which(pcoa_data$species == "Montipora danae" | pcoa_data$species == "Montipora digitata" |
+	pcoa_data$species == "Montipora monasteriata" | pcoa_data$species == "Montipora venosa" |
+	pcoa_data$species == "Montipora verrucosa"),]
+
+#PCoA plot with species as points
+#dev.new(width=6.2, height=4.3)
+#ggplot(data=pcoa_data, aes(pcoa_axis1, pcoa_axis2)) + 
+		geom_point(aes(colour=lifehistory), size=I(3))
+
+#PCoA plot with species as points, symbols by REGION
+
+dev.new(width=6, height=4.25)
+ggplot(data=pcoa_data, aes(pcoa_axis1, pcoa_axis2)) + 
+		geom_point(aes(colour=lifehistory, shape=region), size=I(3))
+
+last_plot() + scale_shape_manual(value=c(1,19))
+
+#Colours for three life-histories
+#Red, competitive: #f8210d
+#Blue, stress-tolerant: #0dacf8
+#Green, weedy: #95f80d
+
+#from AR2
+#c("#F8210D","#95F80D","#00B4F8","#63D3FD")
+
+levels(pcoa_data$lifehistory)
+mycolours <- c("#f8210d","#95f80d","#00B4F8","208")
+last_plot() + scale_colour_manual(values=mycolours)
+
+#PCoA plot outline for theoretical figure
+#Colour points same as grey triangle
+#dev.new(width=6.2, height=4.3)
+#ggplot(data=pcoa_data, aes(pcoa_axis1, pcoa_axis2)) + 
+	#geom_point(aes(colour=lifehistory), size=I(3))
+#last_plot() + scale_colour_manual(values=c("white","white","white"))
+#last_plot() + scale_colour_manual(values=c("#B2B2B2","#B2B2B2","#B2B2B2"))
+
+
+#White background plot
+last_plot() + theme_bw(base_size=14) +
+	opts(panel.grid.minor=theme_blank(), panel.grid.major=theme_blank())	
+last_plot() + opts(axis.title.x=theme_blank(), axis.title.y=theme_blank())
+last_plot() + scale_x_continuous(limits=c(-0.3,0.4))
+last_plot() + scale_y_continuous(limits=c(-0.4,0.2))
+
+last_plot() + opts(plot.background=theme_blank(), panel.background=theme_blank())
+
+#Black Keynote plot
+last_plot() + theme_bw(base_size=14) +
+	opts(panel.grid.minor=theme_blank(), 
+ 	 	panel.grid.major=theme_blank(),
+	 	axis.title.x=theme_blank(), 
+	 	axis.title.y=theme_blank(), 
+		panel.background=theme_rect(fill=NA), 
+		panel.border=theme_rect(fill=NA, colour = "white"))
+last_plot() + opts(legend.key = theme_blank(), 
+				legend.text = theme_text(colour = "white"), 
+				axis.text.x = theme_text(colour = "white"), 
+				axis.text.y = theme_text(colour = "white"),
+				axis.ticks = theme_segment(colour = "white"))
+				
+				
+#export as eps to photoshop
+setwd("/Users/em.work/Dropbox/R_data/Global coral traits/Global Clusters_Dec2011/plots/revision plots")
+dev.print(device = postscript, "PCOA spp points.eps")
+
+#add spp labels to id outliers
+a <- last_plot()
+a + geom_text(aes(label=spp_abbrev), size=2, hjust= -0.1, vjust = 0.2)
+
+
+
+# ==================================================
+# = Calculate variation (betadisper) across groups =
+# ==================================================
+global$cluster3 <- factor(global$cluster3, levels=c(1,3,2))
+
+model <- betadisper(Global_gow, global$cluster4)
+plot(model)
+boxplot(model, ylim=c(0,0.3), boxwex=0.5)
+permutest(model)
+
+#Weedy is more variable than competitive or stress tolerant
+TukeyHSD(model)
+
+#Strong main effect of cluster on trait dispersion
+anova(model)
+
+#Try PCoA with cmdscale
+cmd_pcoa <- cmdscale(Global_gow, eig=TRUE, add=TRUE, k=4)
+x <- cmd_pcoa$points[,1]
+y <- cmd_pcoa$points[,2]
+length(x)
+
+plot(x,y)
+?cmdscale
+
+# ==================
+# = Random forest  =
+# ==================
+setwd("/Users/em.work/Dropbox/R_data/Global coral traits/Global Clusters_Dec2011")
+global <- read.csv(file = "Traits data with clusters_wide.csv", header = TRUE, stringsAsFactors = TRUE)
+head(global)
+names(global)
+nrow(global)
+
+subset(global, cluster3 == 1 & region == "Caribb")
+
+#rF can't deal with missing predictor values. Need to impute
+
+# ====================
+# = IMPUTE BY REGION =
+# ====================
+#For missing binary (brood & spawn ONLY values), impute replaces value with average of other values in cluster
+globalImpute <- rfImpute(y=cluster3, x=global[,c(3:15,18)])
+names(globalImpute)
+head(globalImpute)
+
+global_rF <- randomForest(cluster3 ~ ., globalImpute, ntree=20000)
+global_rF
+
+#merge region into globalImpute
+nrow(globalImpute)
+head(globalImpute)
+
+globalImpute2 <- cbind(region = global$region, species = global$species, globalImpute)
+head(globalImpute2)
+names(globalImpute2)
+nrow(globalImpute2)
+levels(globalImpute2$region)
+table(globalImpute2$cluster3)
+
+IP_rF <- randomForest(cluster3 ~ . - region , subset(globalImpute2[,c(1,3:17)], region == "IP"), ntree=20000)
+IP_rF
+
+Atl_rF <- randomForest(cluster3 ~ . - region , subset(globalImpute2[,c(1,3:17)], region == "Caribb"), ntree=20000)
+Atl_rF
+
+weedImpute <- subset(globalImpute2, cluster3 == 2)
+nrow(weedImpute)
+
+Weed_rF <- randomForest(region ~ . - cluster3 , subset(globalImpute2, cluster3 == 2), ntree=20000)
+Weed_rF
+
+varImpPlot(Weed_rF, main="Weedy corals")
+weed_traits <- rownames(importance(Weed_rF))
+weed_gini <- data.frame(traits =  weed_traits, varImp = importance(Weed_rF)[,1], row.names=c(1:13))
+write.csv(weed_gini, "rF weed import by region.csv", row.names=FALSE)
+
+
+#Variable importance plots
+varImpPlot(global_rF, main="Global corals")
+varImpPlot(IP_rF, main="IP corals")
+varImpPlot(Atl_rF, main="Atlantic corals")
+
+
+
+#Pull out variable importance data for ggplot
+importance(global_rF)
+rF_variables <- as.factor(row.names(importance(global_rF)))
+
+rF_importance <- data.frame(importance(global_rF), row.names=NULL)[,1]
+is.numeric(rF_importance)
+
+IPrF_importance <- data.frame(importance(IP_rF), row.names=NULL)[,1]
+AtlrF_importance <- data.frame(importance(Atl_rF), row.names=NULL)[,1]
+
+rF_VarImp <- data.frame(Variables = rF_variables, globalGini = rF_importance, IPGini = IPrF_importance, 
+							AtlGini = AtlrF_importance)
+str(rF_VarImp)
+head(rF_VarImp)
+
+rF_VarImp$global_01 <- (rF_VarImp$globalGini - min(rF_VarImp$globalGini)) / 
+							(max(rF_VarImp$globalGini) - min(rF_VarImp$globalGini)) 
+rF_VarImp$IP_01 <- (rF_VarImp$IPGini - min(rF_VarImp$IPGini)) / 
+							(max(rF_VarImp$IPGini) - min(rF_VarImp$IPGini)) 
+rF_VarImp$Atl_01 <- (rF_VarImp$AtlGini - min(rF_VarImp$AtlGini)) / 
+							(max(rF_VarImp$AtlGini) - min(rF_VarImp$AtlGini)) 														
+
+write.csv(rF_VarImp, "rF variable importance2.csv", row.names=FALSE)
+
+# ================================================
+# = IMPUTE FOR BEST-FIT CLUSTERS (N=2, N=3, N=4) =
+# ================================================
+names(global)
+
+#CLUSTERS need to be factors for random forest classification trees (otherwise tries to do a regression tres with too few levels)
+#For missing binary (brood & spawn ONLY values), impute replaces value with average of other values in cluster
+cluster2 <- factor(global$cluster2, levels=c(1,2))
+
+globalImpute2 <- rfImpute(y=cluster2, x=global[,c(3:15,18)])
+names(globalImpute2)
+head(globalImpute2)
+
+globalImpute2 <- cbind(global[,1:2], globalImpute2)
+nrow(globalImpute2)
+names(globalImpute2)
+globalImpute2[1:20,]
+
+global_rF2 <- randomForest(cluster2 ~ ., globalImpute2[,3:17], ntree=20000)
+global_rF2
+
+Atl2 <- subset(globalImpute2, region == "Caribb")
+Atl_rF2 <- randomForest(cluster2 ~ ., Atl2[,3:17], ntree=20000)
+Atl_rF2
+varImpPlot(Atl_rF2)
+
+IP2 <- subset(globalImpute2, region == "IP")
+IP_rF2 <- randomForest(cluster2 ~ ., IP2[,3:17], ntree=20000)
+IP_rF2
+varImpPlot(IP_rF2)
+
+#Random forest with 3 groups
+cluster3 <- factor(global$cluster3, levels=c(1,3,2))
+
+globalImpute3 <- rfImpute(y=cluster3, x=global[,c(3:15,18)])
+names(globalImpute3)
+head(globalImpute3)
+
+globalImpute3 <- cbind(global[,1:2], globalImpute3)
+nrow(globalImpute3)
+names(globalImpute3)
+globalImpute2[1:20,]
+
+global_rF3 <- randomForest(cluster3 ~ ., globalImpute3[,3:17], ntree=20000)
+global_rF3
+
+Atl3 <- subset(globalImpute3, region == "Caribb")
+Atl_rF3 <- randomForest(cluster3 ~ ., Atl3[,3:17], ntree=20000)
+Atl_rF3
+varImpPlot(Atl_rF3)
+
+IP3 <- subset(globalImpute3, region == "IP")
+IP_rF3 <- randomForest(cluster3 ~ ., IP3[,3:17], ntree=20000)
+IP_rF3
+varImpPlot(IP_rF3)
+
+#Random forest with 4 groups
+cluster4 <- factor(global$cluster4, levels=c(1,3,4,2))
+
+globalImpute4 <- rfImpute(y=cluster4, x=global[,c(3:15,18)])
+names(globalImpute4)
+head(globalImpute4)
+
+globalImpute4 <- cbind(global[,1:2], globalImpute4)
+nrow(globalImpute4)
+names(globalImpute4)
+globalImpute4[1:20,]
+
+global_rF4 <- randomForest(cluster4 ~ ., globalImpute4[,3:17], ntree=20000)
+global_rF4
+
+# =======================================
+# = TRAIT SUMMARY TABLES_ revision code =
+# =======================================
+setwd("/Users/em.work/Dropbox/R_data/Global coral traits/Global Clusters_Dec2011")
+global <- read.csv(file = "Traits data with clusters_wide.csv", header = TRUE, stringsAsFactors = TRUE)
+head(global)
+names(global)
+nrow(global)
+
+length(global$cluster3)
+
+head(subset(global, global$cluster2 == 2))
+head(subset(global, global$cluster3 == 2))
+head(subset(global, global$cluster4 == 3))
+
+global$cluster2 <- factor(global$cluster2, levels=c(1,2))
+global$cluster3 <- factor(global$cluster3, levels=c(1,2,3))
+global$cluster4 <- factor(global$cluster4, levels=c(1,2,4,3))
+
+#Count number of species in each cluster
+no_spp <- ddply(global, c("region","cluster3"), function(x) data.frame(count = length(x$species)))
+no_spp
+sum(no_spp$count)
+
+#Melt trait data to calculate mean, sd
+global_melt <- melt(global[,c(1:15,18,22)], id=c("cluster4","region","species"), variable_name = "trait")
+head(global_melt)
+nrow(global_melt)
+names(global_melt)
+
+
+levels(global_melt$trait)
+
+global_melt$trait <- recode(global_melt$trait, "'Branching' = 'Branching'; 'Brooding' = 'Brooding'; 'Corallite' = 'Corallite diameter'; 'Domed' = 'Domed'; 'Genlength' = 'Generation length'; 'Growthrate' = 'Growth rate'; 'Maxsize' = 'Colony size'; 'MedianDepth' = 'Depth range'; 'Plating' = 'Plating'; 'Skeldens' = 'Skeletal density'; 'Solitary' = 'Solitary'; 'Spawning' = 'Spawning'; 'Zoox_looseM' = 'Symbiont diversity'")
+
+global_melt$trait <- factor(global_melt$trait, levels = c("Branching","Domed","Plating","Solitary","Brooding",
+	"Spawning", "Colony size", "Corallite diameter","Depth range", "Fecundity", "Generation length", 
+	"Growth rate", "Skeletal density", "Symbiont diversity"))
+levels(global_melt$trait)
+
+# ddply to averages, sd of each trait by cluster
+global_summary <- ddply(global_melt, c("cluster4", "trait"), function(x) 
+					data.frame(mean = mean(x$value, na.rm = T), sd = sd(x$value, na.rm = T)))
+head(global_summary)
+
+#if trait is binary, convert to percent, no sd
+global_binary <- subset(global_summary, trait == "Branching" | trait == "Domed" | trait == "Plating" | 
+	trait == "Solitary" | trait == "Brooding" | trait == "Spawning")
+
+global_binary$value <- round(global_binary$mean * 100, 1)
+head(global_binary)
+
+#if trait is continuous, round and concatenated with sd
+levels(global_summary$trait)
+global_cont <- subset(global_summary, trait == "Colony size" | trait == "Corallite diameter" | 
+	trait == "Depth range" | trait == "Fecundity" | trait == "Generation length" | 
+	trait == "Growth rate" | trait == "Skeletal density" | trait == "Symbiont diversity")
+
+#round and paste into form for table
+global_cont$mean <- formatC(round(global_cont$mean, 2), 2, format="f")
+global_cont$sd <- formatC(round(global_cont$sd, 2), 2, format="f")
+global_cont$value <- paste(global_cont$mean, " (", global_cont$sd, ")", sep="")
+head(global_cont)
+
+#Bind binary and continuous back together
+global_summary2 <- rbind(global_binary, global_cont)
+
+#Cast to global summary table
+head(global_summary2)
+global_summary3 <- cast(global_summary2, cluster4 ~ trait)
+names(global_summary3)
+head(global_summary3)
+
+global_summary3$region <- rep("Global", 4)
+names(global_summary3)
+global_summary3 <- global_summary3[,c(16,1:15)]
+global_summary3
+
+#2. Summary of each cluster by region
+region_summary <- ddply(global_melt, c("cluster4", "region","trait"), function(x) 
+					data.frame(mean = mean(x$value, na.rm = T), sd = sd(x$value, na.rm = T)))
+head(region_summary)
+nrow(region_summary)
+
+#if trait is binary, convert to percent, no sd
+region_binary <- subset(region_summary, trait == "Branching" | trait == "Domed" | trait == "Plating" | 
+	trait == "Solitary" | trait == "Brooding" | trait == "Spawning")
+
+region_binary$value <- round(region_binary$mean * 100, 1)
+head(region_binary)
+
+#if trait is continuous, round and concatenated with sd
+levels(region_summary$trait)
+region_cont <- subset(region_summary, trait == "Colony size" | trait == "Corallite diameter" | 
+	trait == "Depth range" | trait == "Fecundity" | trait == "Generation length" | 
+	trait == "Growth rate" | trait == "Skeletal density" | trait == "Symbiont diversity")
+
+#round and paste into form for table
+region_cont$mean <- formatC(round(region_cont$mean, 2), 2, format="f")
+region_cont$sd <- formatC(round(region_cont$sd, 2), 2, format="f")
+region_cont$value <- paste(region_cont$mean, " (", region_cont$sd, ")", sep="")
+head(region_cont)
+
+region_summary2 <- rbind(region_binary, region_cont)
+head(region_summary2)
+
+region_summary3 <- cast(data = region_summary2, region + cluster4 ~ trait)
+region_summary3
+
+all_summary <- rbind(global_summary3, region_summary3)
+all_summary
+
+setwd("/Users/em.work/Dropbox/R_data/Global coral traits/Global Clusters_Dec2011/tables/revision tables")
+write.csv(all_summary, "Traits summary_4 clusters.csv", row.names=FALSE)
+
+
+# ===============================
+# = Plot traits across clusters =
+# ===============================
+global_cast <- cast(global_melt, region + cluster4 + species ~ trait)
+head(global_cast)
+nrow(global_cast)
+names(global_cast)
+
+#write.csv(global_cast, "global_cast.csv", row.names=FALSE)
+global_cast <- read.csv(file = "global_cast.csv", header = TRUE, stringsAsFactors = TRUE)
+
+levels(as.factor(global_cast$cluster4))
+global_cast$cluster4 <- factor(global_cast$cluster4, levels=c(1,3,4,2))
+levels(global_cast$cluster4)
+
+
+#Stacked barplots for frequency of continuous variables
+boxplot(global_cast[,8] ~ cluster3)
+
+
+binary_summary <- ddply(global_melt, c("cluster3","trait"), function(x)
+	data.frame(mean = mean(x$value, na.rm = T)))
+head(binary_summary)	
+
+binary_cast <- cast(binary_summary, cluster3 ~ trait)
+binary_cast <- binary_cast[,1:6]
+
+boxplot(binary_cast$Branching ~ binary_cast$cluster3)
+
+
+#Boxplots for continuous variables
+boxplot(global_cast[,9] ~ cluster3)
+
+#Sean's multipanel code!
+#Separate y axes, same x axis
+mylabels <- c("C","S","W")
+
+par(xpd = NA)
+par(mfrow = c(3, 3))
+par(mar = c(0, 3, 0, 0))
+par(oma = c(4, 2, 0.5, 0.5))
+for (i in 1:8) {
+  j = i + 8
+  name = colnames(global_cast)[j]
+  ymin = min(global_cast[,j], na.rm=TRUE)
+  ymax = max(global_cast[,j], na.rm=TRUE) + 0.2*(max(global_cast[,j], na.rm=TRUE))
+  boxplot(global_cast[,j] ~ cluster3, axes = FALSE, xlab = "", ylab = "", ylim=c(0,ymax))
+  box(col = "grey60")
+  if (i %in% c(6, 7, 8)) axis(1, col = "grey60", at = c(1,2,3), labels=mylabels)
+  if (i %in% c(1:5,7,8)) axis(2, col = "grey60", las = 1)
+  if (i %in% 6) axis(2, col = "grey60", las = 1, at = seq(0,60,20))
+  #mtext(letters[i], side = 3, adj = 0.05, line = -1.5, cex=0.9)
+  mtext(name, side = 3, adj = 0.95, line = -1.3, cex=0.7)
+}
+mtext("Life history cluster", side = 1, line = 2.2, outer = TRUE)
+mtext("Trait", side = 2, line = 0.5, outer = TRUE)
+
+ 
+
+
+
+
+
+
